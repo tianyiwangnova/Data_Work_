@@ -1,0 +1,198 @@
+---
+title: "Casper Data Challenge"
+author: "Tianyi Wang"
+output: 
+  html_document: 
+    toc: yes
+---
+
+#Exercise 1
+
+>Crunch the data and tell us whether our return rate is trending up or down. 
+
+##1 Overview
+
+In this brief case study, we will explore the changes of the return rates on the orders from 2016/8 to 2016/12  monthly at Casper. 
+
+Here we define the return rate as:
+
+*return rate of month i = (numbers of returns of which the order dates were in month i) / (numbers of orders in month i)*
+
+###Our final conclusion:
+<br>1. If this is ONLY a simple data cleaning task that doesn't consider the possible returns after today(2017/1/28), then the return rate is trending down.
+<br>2. **(My preference)** If the problem is treated as a real world analytics problem, the return rate decreased in September but will increase a bit in October and soar up in November and December.
+
+To show cleaner result, I hide some long blocks of data cleaning codes .
+
+##2 Data loading and cleaning
+
+In this section we will load and clean the data, and generate the pivot table that will be used for further analysis.
+
+```{r,warning=FALSE,echo=FALSE}
+setwd("C://Users/Think/Desktop/case-CASPER")
+library(tidyr)
+library(dplyr)
+data0=read.csv("XLS.csv",as.is = TRUE)
+data0=data0[,1:4]
+ index.return=which(data0$orderstatus=="returned")
+data0["return after x days"]=0
+for (i in index.return){
+  data0$`return after x days`[i]=as.numeric(as.Date(data0$datereturned[i])-as.Date(data0$dateordered[i]))
+}
+data0=data0%>%separate(dateordered,c('year ordered','month ordered','date ordered'),sep='/')%>%separate(datereturned,c('year returned','month returned','date returned'),sep='/')
+data0=data0[,c(2,5,7,8,9)]
+data.return=data0[data0$orderstatus=="returned",]
+orders=tapply(data0$orders,data0$`month ordered`,sum)
+orders.per.month=data.frame(month=as.numeric(names(orders)),orders=as.numeric(orders))
+orders.per.month=arrange(orders.per.month,month)
+returns=tapply(data.return$orders,data.return$`month ordered`,sum)
+returns.per.month=data.frame(month=as.numeric(names(returns)),orders=as.numeric(returns))
+returns.per.month=arrange(returns.per.month,month)
+orders.per.month['returns']=returns.per.month$orders
+orders.per.month['return rate']=orders.per.month$returns/orders.per.month$orders
+returndays=tapply(data.return$`return after x days`,data.return$`month ordered`,mean)
+mean.returndays=data.frame(month=as.numeric(names(returndays)),orders=as.numeric(returndays))
+mean.returndays=arrange(mean.returndays,month)
+orders.per.month['mean duration between order date and return date (days)']=mean.returndays$orders
+orders.per.month[,1:4]
+```
+
+##3 Whether our return rate is trending up or down?
+
+###3.1 Analysis with the available data
+
+```{r,warning=FALSE}
+library(ggplot2)
+theme_set(theme_classic())
+g1 <- ggplot(orders.per.month, aes(month, `return rate`))
+g1 + geom_bar(stat="identity", width = 0.5, fill="tomato2") + labs(title="Return rate per month", subtitle="2016/08~2016/12")
+```
+
+From the bar chart we can see that our return rate is trending down. **However, this is not the end of the story.** Because we are not sure if some of the customers who purchased in the 5 months period will return in future months. When we browse our orginial data, we can see that some customers who purchased in August will return the mattress 2 or 3 months later. However, our observation period only ends at the end of January 2017 and won't capture, for example, those customers who purchased in December and will return in later months.
+
+Let's take a look at usually after how many days, the customers will return the mattress (**notice that we will only visualize the data from August to October because the duration data for November and December will mainly be within 2 months and can be misleading if we visualize them altogether.**):
+
+```{r,warning=FALSE}
+g2 <- ggplot(data.return[data.return$`month ordered`==8 | data.return$`month ordered`==9| data.return$`month ordered`==10,], aes(x=`return after x days`))
+g2 + geom_histogram(fill="pink3") + labs(title="Histogram of duration between order date and return date (days) per month", subtitle="2016/08~2016/10")
+```
+
+From the histogram we can see that customers can return anytime within 4 months of purchase (and there's even a peak at about 80 days). Thus, it's actually not surprising that our return rate is decreasing because for the recent months we are not able to collect the complete return data yet. For example, we can't guarantee that none of the customers who bought in November will return in Febuary.
+
+Considering this issue, I will seperate the returns each month by **the duration between order date and return date** (I will refer to this metric as **duration**) and redo the analysis. One important assumption we have for the following analysis is that:
+
+**We assume the customers won't return after 120 days.**
+
+This assumption is concluded from the histogram and can make the analysis easier.
+
+Then, I will label the durations as 4 levels:
+
+**level1**: 0~30 days 
+<br>**level2**: 31~60 days
+<br>**level3**: 61~90 days
+<br>**level4**: >90 days
+
+And I will calculate the return rates in each months for each duration level.
+
+```{r,warning=FALSE,echo=FALSE}
+data.return[data.return$`return after x days`<=30,5]=1
+data.return[data.return$`return after x days`>30 & data.return$`return after x days`<=60,5]=2
+data.return[data.return$`return after x days`>60 & data.return$`return after x days`<=90,5]=3
+data.return[data.return$`return after x days`>90,5]=4
+data.return.small=data.return[,c(1,5)]
+library(reshape2)
+return.duration=dcast(data.return.small,`month ordered`~`return after x days`)
+return.duration$`month ordered`=as.numeric(return.duration$`month ordered`)
+return.duration=arrange(return.duration,`month ordered`)
+for(i in 1:5){
+  return.duration[i,2:5]=return.duration[i,2:5]/orders.per.month$orders[i]
+}
+names(return.duration)[2:5]=c("level1","level2","level3","level4")
+return.duration
+```
+*(To understand the table: for 0.02013 in first row, first column, it means that 2.013% of the customers who bought in August returned within 30 days)*
+
+Since our observation period ends at 2017/1/28 and the longest duration our customer can have is 120 days, we would love to know for each month, what duration levels have the **valid return rate**. For example, the return rate in November for duration level 3 might not be valid because customers who purchased at the end of November might return the mattress in February, which will not be captured in our data. **"Invalid"** means that the return rate has a chance to increase in the future.
+
+It's not very hard to conclude that for each month: the duration levels that have valid return rates are:
+<br>8: level1,2,3,4
+<br>9: level1,2,3,4
+<br>10: level1,2,3
+<br>11: level1,2
+<br>12: level1
+
+```{r,warning=FALSE}
+return.duration=melt(return.duration,variable.name = "duration level",value.name = "return rate",id.vars="month ordered")
+g4 <- ggplot(return.duration, aes(x=`month ordered`, y=`return rate`,fill=`duration level`))
+g4 + geom_bar(stat="identity", width = 0.5) + labs(title="Return rate per month by duration(return date - purchase date) level", subtitle="2016/08~2016/12",caption="level 1: 0~30 days; level2: 31~60 days; level3: 61~90 days, level4: >90 days")
+```
+
+After seperating the return rate for each month by the duration level, we might not feel as optimistic as before. Firstly, the return rate for level1 duration (**return within 30 days**) is trending up dramatically. Secondly, the return rate for level2 duration (**return within 30 days**) also shows the trend of climbing up. 
+
+###3.2 What if we have the data until April 2017?
+
+We would be interested in the senario after April 2017 when we have complete return data to **fairly** examine the return rates for the 5 months. Since our data are very limited, I would use two simple ways to make up the missing data.
+
+**Senario 1**
+
+What if the **valid return rate** for level4 remains the same after September, the rate for level3 remains the same after October and the rate for level2 remains the same after November?
+
+```{r,warning=FALSE}
+return.duration.sim=return.duration
+return.duration.sim[18:20,3]=return.duration.sim[17,3]
+return.duration.sim[14:15,3]=return.duration.sim[13,3]
+return.duration.sim[10,3]=return.duration.sim[9,3]
+g5 <- ggplot(return.duration.sim, aes(x=`month ordered`, y=`return rate`,fill=`duration level`))
+g5 + geom_bar(stat="identity", width = 0.5) + labs(title="Return rate per month by duration(return date - purchase date) level", subtitle="2016/08~2016/12",caption="level 1: 0~30 days; level2: 31~60 days; level3: 61~90 days, level4: >90 days")
+```
+
+Looking at the data from month August to October, we might conclude that the return rates for duration level3-4 are decreasing. So assuming they will actually remain the same makes our estimation conservative. In this senario, our return rate is **trending up**.
+
+**Senario 2**
+
+In this senario we will use a more optimistic way to make up the data. We will use the lowest **valid return rate** of each level to make up the unknown real rates in months October~December. For example, we will assume that the return rate in December for level3 duration is the same as the lowest **valid return rate** in previous months (which will be the rate in August).
+
+```{r,warning=FALSE}
+return.duration.sim=return.duration
+return.duration.sim[18:20,3]=return.duration.sim[17,3]
+return.duration.sim[14:15,3]=return.duration.sim[11,3]
+return.duration.sim[10,3]=return.duration.sim[8,3]
+g5 <- ggplot(return.duration.sim, aes(x=`month ordered`, y=`return rate`,fill=`duration level`))
+g5 + geom_bar(stat="identity", width = 0.5) + labs(title="Return rate per month by duration(return date - purchase date) level", subtitle="2016/08~2016/12",caption="level 1: 0~30 days; level2: 31~60 days; level3: 61~90 days, level4: >90 days")
+```
+
+However, in this senario we still can't conclude that the rate is trending down. 
+
+**To sum up, from the graphs above we can tell that the return rate decreased in September but will increase a bit in October and soar up in November and December.**
+
+##4 Conclusion
+
+1. The return rate decreased in September but will increase a bit in October and soar up in November and December.
+2. Over the past five months, the percentage for the customers who bought and return within 60 days are climbing up rapidly.
+3. We might experience high return rates for November and Decemeber. 
+
+#Exercise 2
+
+>Write the SQL code to produce number of completed orders by date (name of source data table is ¡®casper_orders¡¯)
+
+The code will be as following:
+
+```
+SELECT dateordered, orderstatus, SUM(orders) as Num_orders
+FROM casper_orders
+GROUP BY dateordered,orderstatus
+HAVING orderstatus='complete';
+ORDER BY dateordered
+```
+We will try out the code above with `sqldf` package here.
+
+```{r,warning=FALSE}
+library(sqldf)
+casper_orders=read.csv("XLS.csv",as.is = TRUE)
+casper_orders=casper_orders[,1:4]
+casper_orders$dateordered=as.Date(casper_orders$dateordered)
+SQL=sqldf("select dateordered, orderstatus, SUM(orders) as Num_orders from casper_orders group by dateordered,orderstatus having orderstatus='complete' order by dateordered")
+head(SQL)
+```
+
+
