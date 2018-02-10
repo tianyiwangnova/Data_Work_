@@ -1,0 +1,219 @@
+---
+title: "Assessment"
+author: "Tianyi Wang"
+output: html_document
+---
+##Section1 - Data Gathering
+
+###1.1 How would you look at 10 sample rows in the table?
+
+```
+select * from page_table 
+limit 10;
+```
+
+###1.2 How would you look at visitors who saw the 'home page' or the 'checkout page'?
+
+```
+select DISTINCT visitor_id 
+from page_table 
+where page_name='home page' OR page_name='checkout page';
+```
+
+###1.3 Get a list of 100 visitors who saw the most pages
+
+```
+select visitor_id, COUNT(visitor_id) as num_pages_viewed 
+from page_table  
+group by visitor_id 
+order by num_pages_viewed DESC 
+limit 100;
+```
+##Section2 - Data processing/analysis
+
+###2.1 Plot the number of daily sales for all 50 weeks
+
+```{r, echo=FALSE,warning=FALSE}
+library(plyr)
+setwd("C://Users/Think/Desktop/case - RETINA/section2")
+files=list.files(pattern=".*.csv")
+sales=ldply(files, read.csv, stringsAsFactors = FALSE)
+library(tidyr)
+sales=sales%>%separate(sale_time,c("date","time"),sep=" ")
+library(sqldf)
+daily.sales=sqldf("select date, COUNT(time) as num_sales from sales group by date")
+library(ggplot2)
+library(ggthemes)
+ggplot(data=daily.sales, aes(x=date, y=num_sales,group=1))+geom_line()+theme_calc()+ggtitle("daily sales")+theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+```
+
+###2.2 On what date was that sudden change?
+
+```{r, echo=FALSE}
+daily.sales$date[min(which(daily.sales$num_sales>650))]
+```
+
+###2.3
+
+```{r, echo=FALSE}
+as.Date("2013-04-29")-as.Date(daily.sales[1,1])
+```
+
+Are the daily sales in the past 210 days before 2013-04-29 normally distributed?
+
+```{r, echo=FALSE}
+hist(daily.sales$num_sales[1:210],main="daily sales in the first 210 days")
+```
+
+It can be considered as normal distribution. 
+
+The P value of observing the sudden large sale volume on 2013-04-29:
+
+```{r, echo=FALSE}
+library(MASS)
+fit=fitdistr(daily.sales$num_sales[1:210], "normal")
+para=fit$estimate
+dnorm(daily.sales$num_sales[211],mean=para[1],sd=para[2])
+```
+
+On 2013-04-29, our sales number suddenly climbed up to 732. However, if our sales performance remained the same, there's only a 8.637e-8% (which is almost 0%) chance that you would get 732 sales. So it is statistically significant.
+
+###2.4
+
+```{r, echo=FALSE}
+daily.female=sqldf("select date, purchaser_gender, COUNT(time) as num_sales from sales group by date, purchaser_gender having purchaser_gender='female'")
+daily.sales["percentage_of_female_customers"]=daily.female$num_sales/daily.sales$num_sales
+daily.sales["period"]="after the change"
+daily.sales[1:210,"period"]="before the change"
+ggplot(daily.sales,aes(x=percentage_of_female_customers,y=num_sales,colour=period))+geom_point()+theme_calc()
+```
+
+Yes. As we can see from the scatter plot, before 2013-04-29 (blue points) , the customers are mainly female while after 2013-04-29 (red points), the customers are mainly male.
+
+###2.5
+
+The percentages of sales in each daypart over all 50 weeks:
+
+```{r, echo=FALSE}
+sales=sales%>%separate(time,c("hour","minute","second"),sep=":")
+sales$hour=as.numeric(sales$hour)
+daypart=function(x){
+  y="night"
+  if(x>=6){y="morning"}
+  if(x>=12){y="afternoon"}
+  if(x>=18){y="evening"}
+  return(y)
+}
+hour=sales$hour
+dayparts=ldply(hour,daypart)
+sales["daypart"]=dayparts
+round(table(dayparts)/nrow(dayparts),4)
+```
+
+##Section3 - Machine learning
+
+```{r, echo=FALSE,warning=FALSE}
+dataset=read.csv("C://Users/Think/Desktop/case - RETINA/SampleData_FlowerShop_Transactions_Table.csv")
+print("number of unique customers:")
+length(unique(dataset$ï»¿customer_id))
+print("number of unique product types")
+length(unique(dataset$product_type))
+print("number of unique vendors")
+length(unique(dataset$vendor))
+```
+
+We first take a look at our data. There are in total 10000 unique customers, 21 unique product types and 5 unique vendors. We only have the past transaction records including total sales amount, cost of sale and quantity in each transaction. In order to build the recommendation engine, we can use user-based collaborative filtering and item-based collaborative filtering and then ensemble the result.
+
+####User-based collaborative filtering:
+Based on customers spent (this could be calculated from total_sale_amount_usd or cost_of_sal) on each product+vendor combination, we can segment the customers into several neightborhood groups. This can be done by calculating Pearson-coefficients among the customers. After we have finished segmenting, when we want to recommend products to customer A, we look at his/her neighbors who look the most similar to him/her, find out the products that A's neighbors have bought before but A hasn't and use a specially designed metric to score the level of recommendation of a certain product.
+
+Let's assume that A only has 2 neighbors B and C. The metric is£º
+
+(coefficient between A&B ¡Á B's spent on the product + coefficient between A&C ¡Á C's spent on the product) / (coefficient between A&B + coefficient between A&C)
+
+####Item-based collaborative filtering:
+The process of calculating correlation coefficients among products(product+vendor combination) is very similar to the one above. But when we recommend products to customer A, we look at the products A bought and recommend according to each of the bought products. 
+
+In the end, we can ensemble the recommendations from the two methods by adding the scores for each of the recommended product for each customer and give our final recommendation.
+
+##Section4 - visualization & basic data manipulation
+
+###4.1 Who's the head of this organization?
+
+```{r, echo=FALSE}
+options(scipen=14)
+org=read.csv("C://Users/Think/Desktop/case - RETINA/org_data.csv")
+names(org)[1]="employee_id"
+org$employee_id=as.character(org$employee_id)
+org$manager_employee_id=as.character(org$manager_employee_id)
+tree=sqldf("select m.employee_name as manager, e.employee_name as employee from org m LEFT OUTER JOIN org e on m.employee_id=e.manager_employee_id where employee is not NULL")
+
+all.employee=data.frame(employee=unique(org$employee_name))
+score=rep(0,nrow(all.employee))
+data1=org
+level=1
+while(length(which(score==0))>0){
+  data2=sqldf("select o.* from org o JOIN (select m.employee_name as manager, e.employee_name as employee from data1 m LEFT OUTER JOIN data1 e on m.employee_id=e.manager_employee_id where employee is NULL) d on o.employee_name=d.manager")
+  data4=sqldf("select o.* from org o JOIN (select DISTINCT m.employee_name as manager from data1 m LEFT OUTER JOIN data1 e on m.employee_id=e.manager_employee_id where e.employee_name is not NULL) d on o.employee_name=d.manager")
+  data1=data4
+  data3=as.character(data2$employee_name)
+  for(i in 1:length(data3)){
+    row=which(all.employee$employee==data3[i])
+    score[row]=level}
+  level=level+1
+}
+all.employee["level"]=score
+as.character(all.employee[which.max(score),"employee"])
+```
+
+###4.2 What's the average and median manager to employee ratio?
+
+The average and median were calculated on manager-basis (There are 38 managers who have employee(s) below them, each of them has a manager to employee ratio).
+
+```{r, echo=FALSE}
+managers=sqldf("select manager, COUNT(employee) as num_employees from tree group by manager")
+managers["manager_to_employee"]=1/managers$num_employees
+print("average manager to employee ratio:")
+round(mean(managers$manager_to_employee),3)
+print("median manager to employee ratio:")
+round(median(managers$manager_to_employee),3)
+```
+
+###4.3
+Maximum depth of the organization. 
+
+```{r, echo=FALSE,warning=FALSE}
+data1=org
+level1=sqldf("select m.employee_name as employee1, e.employee_name as employee from data1 m LEFT OUTER JOIN data1 e on m.employee_id=e.manager_employee_id where employee is NULL")
+findmaxdepth=function(x){
+  subtree=tree[tree$employee==x,]
+  depth=0
+  for(i in 1:nrow(subtree)){
+    small.tree=data.frame(subtree[i,])
+    d=1
+    while(nrow(small.tree)>0){
+      y=small.tree$manager
+      small.tree=tree[tree$employee==y,]
+      d=d+1
+    }
+    if(d>depth)(depth=d)
+  }
+  return(depth)
+}
+depths=ldply(level1$employee1,findmaxdepth)
+max(depths$V1)
+```
+
+###4.4
+```{r, echo=FALSE,warning=FALSE}
+#library(igraph)
+#g = graph.data.frame(tree, directed = T)
+#V(g)$label = V(g)$name
+#tkplot(g)
+```
+
+Using `igraph` package we are able to create the graph below:**(next page)**
+
+!(organization plot.png)
